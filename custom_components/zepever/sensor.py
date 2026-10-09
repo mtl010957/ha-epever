@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -11,6 +13,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
+    EntityCategory,
     UnitOfElectricCurrent,
     UnitOfElectricPotential,
     UnitOfEnergy,
@@ -26,6 +29,7 @@ from .const import (
     BATTERY_VOLTAGE_STATUS_OPTIONS,
     CHARGING_STATUS_OPTIONS,
     CONF_DEVICE_NAME,
+    CONNECTION_QUALITY_OPTIONS,
     DOMAIN,
 )
 from .coordinator import EpeverDataUpdateCoordinator
@@ -229,6 +233,27 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
     ),
 )
 
+# Reports on the link itself, so it is fed from coordinator poll statistics
+# rather than device data.
+CONNECTION_QUALITY_DESCRIPTION = SensorEntityDescription(
+    key="connection_quality",
+    translation_key="connection_quality",
+    device_class=SensorDeviceClass.ENUM,
+    options=list(CONNECTION_QUALITY_OPTIONS),
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
+# Its own sensor rather than an attribute: it changes only when a failure
+# enters or leaves the window, and gets history and statistics this way.
+POLL_FAILURE_RATE_DESCRIPTION = SensorEntityDescription(
+    key="poll_failure_rate",
+    translation_key="poll_failure_rate",
+    native_unit_of_measurement=PERCENTAGE,
+    state_class=SensorStateClass.MEASUREMENT,
+    suggested_display_precision=1,
+    entity_category=EntityCategory.DIAGNOSTIC,
+)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -239,7 +264,14 @@ async def async_setup_entry(
     coordinator: EpeverDataUpdateCoordinator = entry.runtime_data
 
     async_add_entities(
-        EpeverSensor(coordinator, description) for description in SENSOR_DESCRIPTIONS
+        [
+            *(
+                EpeverSensor(coordinator, description)
+                for description in SENSOR_DESCRIPTIONS
+            ),
+            EpeverConnectionQualitySensor(coordinator, CONNECTION_QUALITY_DESCRIPTION),
+            EpeverPollFailureRateSensor(coordinator, POLL_FAILURE_RATE_DESCRIPTION),
+        ]
     )
 
 
@@ -271,3 +303,39 @@ class EpeverSensor(CoordinatorEntity[EpeverDataUpdateCoordinator], SensorEntity)
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get(self.entity_description.key)
+
+
+class EpeverConnectionQualitySensor(EpeverSensor):
+    """Link health derived from recent poll outcomes."""
+
+    @property
+    def available(self) -> bool:
+        """Stay available: this sensor has to report the outage itself."""
+        return True
+
+    @property
+    def native_value(self) -> str:
+        """Return ok, degraded or offline."""
+        return self.coordinator.connection_quality
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose failure details; these change only when a poll fails."""
+        return {
+            "consecutive_failures": self.coordinator.consecutive_failures,
+            "last_failed_segment": self.coordinator.last_failed_segment,
+        }
+
+
+class EpeverPollFailureRateSensor(EpeverSensor):
+    """Share of failed polls within the recent window."""
+
+    @property
+    def available(self) -> bool:
+        """Stay available alongside the connection quality sensor."""
+        return True
+
+    @property
+    def native_value(self) -> float:
+        """Return the failure rate in percent."""
+        return round(self.coordinator.recent_failure_rate * 100, 1)

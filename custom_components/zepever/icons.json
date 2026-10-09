@@ -1,0 +1,17 @@
+{
+  "entity": {
+    "sensor": {
+      "connection_quality": {
+        "default": "mdi:lan-connect",
+        "state": {
+          "ok": "mdi:lan-connect",
+          "degraded": "mdi:lan-pending",
+          "offline": "mdi:lan-disconnect"
+        }
+      },
+      "poll_failure_rate": {
+        "default": "mdi:lan-pending"
+      }
+    }
+  }
+}

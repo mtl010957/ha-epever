@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from datetime import timedelta
 from typing import Any
 
@@ -17,6 +18,11 @@ from .const import (
     CONF_DEVICE_ADDRESS,
     CONF_DEVICE_PORT,
     CONF_UNIT_ID,
+    CONNECTION_QUALITY_DEGRADED,
+    CONNECTION_QUALITY_DEGRADED_RATE,
+    CONNECTION_QUALITY_OFFLINE,
+    CONNECTION_QUALITY_OK,
+    CONNECTION_QUALITY_WINDOW,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_UNIT_ID,
     DOMAIN,
@@ -56,7 +62,11 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # operation (poll or reacquire toggle) must hold this lock.
         self.modbus_lock = asyncio.Lock()
         self._last_reacquire: float | None = None
-        self._consecutive_failures = 0
+        self.consecutive_failures = 0
+        # Outcome of the most recent polls (True = success) and the segment
+        # of the last failure, for the connection quality sensor.
+        self.recent_polls: deque[bool] = deque(maxlen=CONNECTION_QUALITY_WINDOW)
+        self.last_failed_segment: str | None = None
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from Epever device."""
@@ -68,29 +78,51 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if data is None:
                 raise UpdateFailed("Failed to retrieve data from device")
         except Exception as err:
-            self._consecutive_failures += 1
+            self.consecutive_failures += 1
+            self.recent_polls.append(False)
+            self.last_failed_segment = getattr(err, "segment", None)
             # Log every failure up to the threshold (the base coordinator
             # only logs the first) so the failing segments can be compared;
             # beyond it a sustained outage would flood the log.
             log = (
                 _LOGGER.warning
-                if self._consecutive_failures <= MAX_CONSECUTIVE_FAILURES
+                if self.consecutive_failures <= MAX_CONSECUTIVE_FAILURES
                 else _LOGGER.debug
             )
             log(
                 "Poll failed (%d/%d consecutive): %s",
-                self._consecutive_failures,
+                self.consecutive_failures,
                 MAX_CONSECUTIVE_FAILURES,
                 err,
             )
             if (
                 self.data is not None
-                and self._consecutive_failures < MAX_CONSECUTIVE_FAILURES
+                and self.consecutive_failures < MAX_CONSECUTIVE_FAILURES
             ):
                 return self.data
             raise UpdateFailed(f"Error communicating with device: {err}") from err
-        self._consecutive_failures = 0
+        self.consecutive_failures = 0
+        self.recent_polls.append(True)
         return data
+
+    @property
+    def recent_failure_rate(self) -> float:
+        """Fraction of failed polls within the recent window."""
+        if not self.recent_polls:
+            return 0.0
+        return self.recent_polls.count(False) / len(self.recent_polls)
+
+    @property
+    def connection_quality(self) -> str:
+        """Summarize link health: offline, degraded or ok."""
+        if not self.last_update_success:
+            return CONNECTION_QUALITY_OFFLINE
+        if (
+            self.consecutive_failures
+            or self.recent_failure_rate >= CONNECTION_QUALITY_DEGRADED_RATE
+        ):
+            return CONNECTION_QUALITY_DEGRADED
+        return CONNECTION_QUALITY_OK
 
     async def async_force_mppt_reacquire(self, off_seconds: int) -> None:
         """Toggle charging off/on to provoke an MPPT re-sweep (experimental).

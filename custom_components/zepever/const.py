@@ -14,6 +14,20 @@ DEFAULT_SCAN_INTERVAL = 5  # seconds
 # keep serving the last good data so a dropped frame doesn't flap them.
 MAX_CONSECUTIVE_FAILURES = 3
 
+# Connection quality sensor: failure rate over the last N polls above which
+# the link counts as degraded even while polls currently succeed. Set to
+# 2 of 12 so a lone dropped frame (routine over WiFi + VPN) stays green.
+CONNECTION_QUALITY_WINDOW = 12  # polls, ~1 min at the default interval
+CONNECTION_QUALITY_DEGRADED_RATE = 0.15
+CONNECTION_QUALITY_OK = "ok"
+CONNECTION_QUALITY_DEGRADED = "degraded"
+CONNECTION_QUALITY_OFFLINE = "offline"
+CONNECTION_QUALITY_OPTIONS = (
+    CONNECTION_QUALITY_OK,
+    CONNECTION_QUALITY_DEGRADED,
+    CONNECTION_QUALITY_OFFLINE,
+)
+
 BATTERY_VOLTAGE_STATUS_LOW_VOLTAGE_DISCONNECT = "low_voltage_disconnect"
 BATTERY_VOLTAGE_STATUSES = {
     0: "normal",

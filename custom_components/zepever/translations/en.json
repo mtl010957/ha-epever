@@ -42,6 +42,17 @@
                     "equalize": "Equalize",
                     "unknown": "Unknown"
                 }
+            },
+            "connection_quality": {
+                "name": "Connection quality",
+                "state": {
+                    "ok": "🟢 Good",
+                    "degraded": "🟡 Unstable",
+                    "offline": "🔴 Offline"
+                }
+            },
+            "poll_failure_rate": {
+                "name": "Poll failure rate"
             }
         }
     },
