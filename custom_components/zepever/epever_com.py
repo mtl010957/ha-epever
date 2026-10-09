@@ -6,6 +6,7 @@ from typing import Any
 
 from pymodbus import FramerType
 from pymodbus.client import ModbusTcpClient
+from pymodbus.exceptions import ModbusException
 
 from .const import (
     BATTERY_VOLTAGE_STATUS_LOW_VOLTAGE_DISCONNECT,
@@ -96,6 +97,58 @@ def get_pv_voltage(host: str, port: int, unit_id: int = 1) -> float | None:
         client.close()
 
 
+class EpeverReadError(Exception):
+    """A poll segment failed at the transport level (no/garbled response).
+
+    Carries the segment label so logs show which read keeps failing — a
+    single segment failing repeatedly points at the firmware, random
+    segments point at the link.
+    """
+
+    def __init__(self, segment: str, address: int | None, err: Exception) -> None:
+        """Initialize with the failing segment, its start register and cause."""
+        where = segment if address is None else f"{segment} (0x{address:04X})"
+        super().__init__(f"segment {where} failed: {err}")
+        self.segment = segment
+
+
+def _read_segment(
+    client: ModbusTcpClient,
+    segment: str,
+    address: int,
+    count: int,
+    unit_id: int,
+    holding: bool = False,
+) -> list[int] | None:
+    """Read one labelled poll segment.
+
+    Returns None when the device answers with an error or a short response
+    (some firmware variants lack a block; the rest of the poll goes on).
+    Raises EpeverReadError when the transport fails, because a timed-out
+    RTU stream can't be trusted for the following reads.
+    """
+    read = client.read_holding_registers if holding else client.read_input_registers
+    try:
+        result = read(address=address, count=count, device_id=unit_id)
+    except ModbusException as err:
+        raise EpeverReadError(segment, address, err) from err
+    if result.isError():
+        _LOGGER.debug(
+            "Segment %s (0x%04X) returned an error: %s", segment, address, result
+        )
+        return None
+    if len(result.registers) < count:
+        _LOGGER.debug(
+            "Segment %s (0x%04X) truncated: %d of %d registers",
+            segment,
+            address,
+            len(result.registers),
+            count,
+        )
+        return None
+    return result.registers
+
+
 def _value16(value: int) -> float:
     """Convert 16-bit signed value to float, scaled by 100."""
     return (value if value < 32768 else value - 65536) / 100.0
@@ -130,13 +183,19 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
         unit_id: Modbus unit ID of the device.
 
     Returns:
-        Dictionary with all device data, or None if an error occurs.
+        Dictionary with all device data, or None on a decoding error.
+
+    Raises:
+        EpeverReadError: if connecting or a segment read fails at the
+            transport level; the message names the segment.
     """
     client = ModbusTcpClient(host=host, port=port, retries=1, framer=FramerType.RTU)
 
     try:
         if not client.connect():
-            return None
+            raise EpeverReadError(
+                "connect", None, ConnectionError(f"could not connect to {host}:{port}")
+            )
 
         # Send initialization sequence (required by Epever devices)
         client.send(_INIT_SEQUENCE)
@@ -147,12 +206,8 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
         # Epever firmware silently truncates the response past this window
         # (observed: a count=27 read returns only 19 registers), so we keep
         # this read small and fetch later registers separately.
-        result = client.read_input_registers(
-            address=0x3100, count=19, device_id=unit_id
-        )
-        if not result.isError() and len(result.registers) >= 19:
-            registers = result.registers
-
+        registers = _read_segment(client, "realtime", 0x3100, 19, unit_id)
+        if registers is not None:
             # PV array data (offset from 0x3100)
             data["pv_voltage"] = _value16(registers[0])  # 0x3100
             data["pv_current"] = _value16(registers[1])  # 0x3101
@@ -179,9 +234,9 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
         # because some firmware can't serve it together with the earlier
         # block (see comment above). Tolerate failure so other sensors
         # still come online on firmware variants that don't support it.
-        result = client.read_input_registers(address=0x311A, count=2, device_id=unit_id)
-        if not result.isError() and len(result.registers) >= 2:
-            soc = result.registers[0]  # 0x311A, percentage with no scaling
+        registers = _read_segment(client, "soc_remote_temp", 0x311A, 2, unit_id)
+        if registers is not None:
+            soc = registers[0]  # 0x311A, percentage with no scaling
             if 0 <= soc <= 100:
                 data["battery_state_of_charge"] = soc
             # The firmware returns a sentinel value (commonly 0) when no
@@ -189,39 +244,33 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
             # that from a valid reading at the same temperature, so the
             # value is exposed as-is and only obviously bogus readings are
             # rejected by a wide sanity range.
-            remote_temp = _value16(result.registers[1])
+            remote_temp = _value16(registers[1])
             if -100 <= remote_temp <= 150:
                 data["remote_battery_temperature"] = remote_temp
 
         # Read status registers (0x3200 - 0x3202)
-        result = client.read_input_registers(address=0x3200, count=3, device_id=unit_id)
-        if not result.isError() and len(result.registers) >= 3:
-            data["battery_voltage_status"] = decode_battery_voltage_status(
-                result.registers[0]
-            )
+        registers = _read_segment(client, "status", 0x3200, 3, unit_id)
+        if registers is not None:
+            data["battery_voltage_status"] = decode_battery_voltage_status(registers[0])
             # Charging equipment status D3-D2: charge stage.
-            data["charging_status"] = decode_charging_status(result.registers[1])
+            data["charging_status"] = decode_charging_status(registers[1])
             # Discharging equipment status D0: load output running.
-            discharging_status_value = result.registers[2]
+            discharging_status_value = registers[2]
             data["load_output_on"] = bool(discharging_status_value & 0x0001)
 
         # Load control mode: 0 manual, 1 light on/off, 2 light + timer,
         # 3 time control. Keep this separate from the input-register reads.
-        result = client.read_holding_registers(
-            address=LOAD_CONTROL_MODE_REGISTER, count=1, device_id=unit_id
+        registers = _read_segment(
+            client, "load_mode", LOAD_CONTROL_MODE_REGISTER, 1, unit_id, holding=True
         )
-        if not result.isError() and len(result.registers) >= 1:
-            data["load_control_mode"] = result.registers[0]
+        if registers is not None:
+            data["load_control_mode"] = registers[0]
 
         # All energy counters (0x3304 - 0x3313) in one read. 32-bit values
         # in consecutive lo/hi pairs, scaled by 100 (kWh). 0x3300-0x3303
         # carry today's voltage min/max stats which we skip.
-        result = client.read_input_registers(
-            address=0x3304, count=16, device_id=unit_id
-        )
-        if not result.isError() and len(result.registers) >= 16:
-            er = result.registers
-
+        er = _read_segment(client, "energy", 0x3304, 16, unit_id)
+        if er is not None:
             # Consumed energy (load)
             data["consumed_energy_today"] = _value32(er[0], er[1])  # 0x3304-0x3305
             data["consumed_energy_this_month"] = _value32(er[2], er[3])  # 0x3306-0x3307
@@ -241,10 +290,10 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
         # Live battery temperature (RTS-aware, falls back to internal sensor
         # or a 25.00 °C sentinel when no source is wired) and ambient
         # temperature from the controller's statistical block.
-        result = client.read_input_registers(address=0x331D, count=2, device_id=unit_id)
-        if not result.isError() and len(result.registers) >= 2:
-            data["battery_temperature"] = _value16(result.registers[0])  # 0x331D
-            data["ambient_temperature"] = _value16(result.registers[1])  # 0x331E
+        registers = _read_segment(client, "temperatures", 0x331D, 2, unit_id)
+        if registers is not None:
+            data["battery_temperature"] = _value16(registers[0])  # 0x331D
+            data["ambient_temperature"] = _value16(registers[1])  # 0x331E
 
         return data
 
