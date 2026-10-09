@@ -10,6 +10,9 @@ CONF_UNIT_ID = "unit_id"
 DEFAULT_PORT = 9999
 DEFAULT_UNIT_ID = 1
 DEFAULT_SCAN_INTERVAL = 5  # seconds
+# Consecutive failed polls before entities go unavailable; earlier failures
+# keep serving the last good data so a dropped frame doesn't flap them.
+MAX_CONSECUTIVE_FAILURES = 3
 
 BATTERY_VOLTAGE_STATUS_LOW_VOLTAGE_DISCONNECT = "low_voltage_disconnect"
 BATTERY_VOLTAGE_STATUSES = {

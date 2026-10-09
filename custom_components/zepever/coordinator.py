@@ -20,6 +20,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_UNIT_ID,
     DOMAIN,
+    MAX_CONSECUTIVE_FAILURES,
     REACQUIRE_COOLDOWN_SECONDS,
 )
 from .epever_com import (
@@ -55,6 +56,7 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # operation (poll or reacquire toggle) must hold this lock.
         self.modbus_lock = asyncio.Lock()
         self._last_reacquire: float | None = None
+        self._consecutive_failures = 0
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from Epever device."""
@@ -65,9 +67,30 @@ class EpeverDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
             if data is None:
                 raise UpdateFailed("Failed to retrieve data from device")
-            return data
         except Exception as err:
+            self._consecutive_failures += 1
+            # Log every failure up to the threshold (the base coordinator
+            # only logs the first) so the failing segments can be compared;
+            # beyond it a sustained outage would flood the log.
+            log = (
+                _LOGGER.warning
+                if self._consecutive_failures <= MAX_CONSECUTIVE_FAILURES
+                else _LOGGER.debug
+            )
+            log(
+                "Poll failed (%d/%d consecutive): %s",
+                self._consecutive_failures,
+                MAX_CONSECUTIVE_FAILURES,
+                err,
+            )
+            if (
+                self.data is not None
+                and self._consecutive_failures < MAX_CONSECUTIVE_FAILURES
+            ):
+                return self.data
             raise UpdateFailed(f"Error communicating with device: {err}") from err
+        self._consecutive_failures = 0
+        return data
 
     async def async_force_mppt_reacquire(self, off_seconds: int) -> None:
         """Toggle charging off/on to provoke an MPPT re-sweep (experimental).
