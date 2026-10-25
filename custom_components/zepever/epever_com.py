@@ -220,7 +220,7 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
                 registers[6], registers[7]
             )  # 0x3106-0x3107
             # Internal battery sensor on the controller body.
-            data["internal_battery_temperature"] = _value16(registers[16])  # 0x3110
+            # data["internal_battery_temperature"] = _value16(registers[16])  # 0x3110
 
             # Load data
             data["load_voltage"] = _value16(registers[12])  # 0x310C
@@ -228,7 +228,7 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
             data["load_power"] = _value32(registers[14], registers[15])  # 0x310E-0x310F
 
             # Device temperature
-            data["device_temperature"] = _value16(registers[17])  # 0x3111
+            # data["device_temperature"] = _value16(registers[17])  # 0x3111
 
         # Next batch of realtime data, fetched in a separate transaction
         # because some firmware can't serve it together with the earlier
@@ -236,17 +236,19 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
         # still come online on firmware variants that don't support it.
         registers = _read_segment(client, "soc_remote_temp", 0x311A, 2, unit_id)
         if registers is not None:
-            soc = registers[0]  # 0x311A, percentage with no scaling
-            if 0 <= soc <= 100:
-                data["battery_state_of_charge"] = soc
+            data["mos_temperature"] = _value16(registers[0])  # 0x311A
+            data["device_temperature"] = _value16(registers[1])  # 0x311B
+            # soc = registers[0]  # 0x311A, percentage with no scaling
+            # if 0 <= soc <= 100:
+            #    data["battery_state_of_charge"] = soc
             # The firmware returns a sentinel value (commonly 0) when no
             # RTS probe is connected. We have no reliable way to distinguish
             # that from a valid reading at the same temperature, so the
             # value is exposed as-is and only obviously bogus readings are
             # rejected by a wide sanity range.
-            remote_temp = _value16(registers[1])
-            if -100 <= remote_temp <= 150:
-                data["remote_battery_temperature"] = remote_temp
+            #remote_temp = _value16(registers[1])
+            #if -100 <= remote_temp <= 150:
+            #    data["remote_battery_temperature"] = remote_temp
 
         # Read status registers (0x3200 - 0x3202)
         registers = _read_segment(client, "status", 0x3200, 3, unit_id)
