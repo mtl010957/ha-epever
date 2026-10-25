@@ -124,6 +124,14 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         suggested_display_precision=2,
     ),
     SensorEntityDescription(
+        key="mos_temperature",
+        name="MOS Temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+    ),
+    SensorEntityDescription(
         key="remote_battery_temperature",
         name="Remote Battery Temperature",
         device_class=SensorDeviceClass.TEMPERATURE,
