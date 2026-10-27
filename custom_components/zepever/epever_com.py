@@ -154,9 +154,8 @@ def _value16(value: int) -> float:
     return (value if value < 32768 else value - 65536) / 100.0
 
 
-def _value32(high: int, low: int) -> float:
+def _value32(low: int, high: int) -> float:
     """Convert 32-bit signed value to float, scaled by 100."""
-    # TEP series seems to have byte order swapped
     combined = low + (high << 16)
     return (combined if combined < 2147483648 else combined - 4294967296) / 100.0
 
