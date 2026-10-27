@@ -238,9 +238,9 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
         if registers is not None:
             # 0x311A and 0x311B seem to always have the same value, the app
             # only shows one temperature for the device so we'll just use the
-            # 0x311B value for now
-            #data["mos_temperature"] = _value16(registers[0])  # 0x311A
-            data["device_temperature"] = _value16(registers[1])  # 0x311B
+            # 0x311A value for now
+            data["device_temperature"] = _value16(registers[0])  # 0x311A
+            data["mos_temperature"] = _value16(registers[1])  # 0x311B
             # soc = registers[0]  # 0x311A, percentage with no scaling
             # if 0 <= soc <= 100:
             #    data["battery_state_of_charge"] = soc
