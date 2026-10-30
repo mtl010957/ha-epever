@@ -280,17 +280,18 @@ def get_all_data(host: str, port: int, unit_id: int = 1) -> dict[str, Any] | Non
             data["consumed_energy_today"] = _value32(er[0], er[1])  # 0x3304-0x3305
             data["consumed_energy_this_month"] = _value32(er[2], er[3])  # 0x3306-0x3307
             data["consumed_energy_this_year"] = _value32(er[4], er[5])  # 0x3308-0x3309
-            data["total_consumed_energy"] = _value32(er[6], er[7])  # 0x330A-0x330B
+            # No consumed energy since we have no load output
+            #data["total_consumed_energy"] = _value32(er[6], er[7])  # 0x330A-0x330B
 
             # Generated energy (PV)
-            data["generated_energy_today"] = _value32(er[8], er[9])  # 0x330C-0x330D
+            data["generated_energy_today"] = _value32(er[6], er[7])  # 0x330C-0x330D
             data["generated_energy_this_month"] = _value32(
-                er[10], er[11]
+                er[8], er[9]
             )  # 0x330E-0x330F
             data["generated_energy_this_year"] = _value32(
-                er[12], er[13]
+                er[10], er[11]
             )  # 0x3310-0x3311
-            data["total_generated_energy"] = _value32(er[14], er[15])  # 0x3312-0x3313
+            data["total_generated_energy"] = _value32(er[12], er[13])  # 0x3312-0x3313
 
         # Live battery temperature (RTS-aware, falls back to internal sensor
         # or a 25.00 °C sentinel when no source is wired) and ambient
